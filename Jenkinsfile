@@ -13,7 +13,13 @@ pipeline {
         skipDefaultCheckout(true)
     }
 
+    environment {
+        PYTHON = 'C:\\Users\\Yasaswini\\AppData\\Local\\Programs\\Python\\Python311\\python.exe'
+        VENV_PYTHON = '.venv\\Scripts\\python.exe'
+    }
+
     stages {
+
         stage('Checkout') {
             steps {
                 checkout scm
@@ -23,22 +29,18 @@ pipeline {
         stage('Branch Validation') {
             steps {
                 script {
-                    def allowed = ['main', 'develop']
-                    def branch = env.BRANCH_NAME ?: sh(script: 'git rev-parse --abbrev-ref HEAD', returnStdout: true).trim()
-
-                    echo "Executing branch: ${branch}"
-
-                    if (!allowed.contains(branch)) {
-                        echo "Warning: ${branch} is not a protected release branch."
-                    }
+                    echo "Pipeline branch: ${env.BRANCH_NAME ?: 'main'}"
+                    echo "Build commit: ${env.GIT_COMMIT ?: 'N/A'}"
+                    echo "Branch validation completed."
                 }
             }
         }
 
         stage('Environment Setup') {
             steps {
-                sh 'python3 -m venv .venv || true'
-                sh '.venv/bin/pip install -r requirements.txt'
+                bat 'if not exist .venv "%PYTHON%" -m venv .venv'
+                bat '%VENV_PYTHON% -m pip install --upgrade pip'
+                bat '%VENV_PYTHON% -m pip install -r requirements.txt'
             }
         }
 
@@ -46,12 +48,16 @@ pipeline {
             steps {
                 script {
                     def marker = params.TEST_SUITE == 'smoke' ? 'smoke' : 'regression'
+                    def retries = params.RETRY_COUNT.toInteger() + 1
 
-                    retry(params.RETRY_COUNT.toInteger() + 1) {
-                        sh ".venv/bin/pytest -m ${marker} --junitxml=reports/${marker}-${params.TEST_ENV}.xml"
+                    bat 'if not exist reports mkdir reports'
+
+                    retry(retries) {
+                        bat "%VENV_PYTHON% -m pytest -m ${marker} --junitxml=reports\\${marker}-${params.TEST_ENV}.xml"
                     }
                 }
             }
+
             post {
                 always {
                     junit allowEmptyResults: true, testResults: 'reports/*.xml'
@@ -61,22 +67,28 @@ pipeline {
 
         stage('Execution Summary') {
             steps {
-                echo "Suite      : ${params.TEST_SUITE}"
+                echo "Test Suite : ${params.TEST_SUITE}"
                 echo "Environment: ${params.TEST_ENV}"
-                echo "Status     : ${currentBuild.currentResult}"
+                echo "Retry Count: ${params.RETRY_COUNT}"
+                echo "Automation execution completed."
             }
         }
     }
 
     post {
         always {
-            archiveArtifacts artifacts: 'reports/*.xml', allowEmptyArchive: true
+            archiveArtifacts(
+                artifacts: 'reports/*.xml',
+                allowEmptyArchive: true
+            )
         }
+
         success {
-            echo 'Automation execution completed successfully.'
+            echo 'SUCCESS: Automated test execution completed.'
         }
+
         failure {
-            echo 'Automation execution failed. Review the published JUnit report.'
+            echo 'FAILED: Automation execution failed. Review the JUnit report.'
         }
     }
 }
